@@ -82,23 +82,16 @@ def create_database(db_file: str):
     conn.close()
 
 
-def execute_sql_query(db_file: str, sql: str):
-    try:
-        with sqlite3.connect("./database/" + db_file) as conn:
-            conn.execute(sql)
-    except sqlite3.OperationalError as e:
-        print("Failed to execute SQL query:", e)
-
-
 def create_table_sql(table_name: str, schema: dict) -> str:
     columns = ", ".join(f"{k} {v}" for k, v in schema.items())
     return f"""CREATE TABLE IF NOT EXISTS {table_name} ({columns});"""
 
 
-def insert_sql(table_name: str, insert_dict: dict) -> str:
-    columns = ", ".join(str(k) for k in insert_dict.keys())
-    values = ", ".join(f"'{v}'" for v in insert_dict.values())
-    return f"""INSERT INTO {table_name} ({columns}) VALUES({values});"""
+def insert_sql(table_name: str, insert_dict: dict):
+    columns = ", ".join(insert_dict.keys())
+    placeholders = ", ".join("?" for _ in insert_dict)
+    sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+    return sql, tuple(insert_dict.values())
 
 
 TLE_SCHEMA = {
@@ -119,16 +112,22 @@ if __name__ == "__main__":
     create_database(db_file)
 
     table_name = "TLE_tracker"
-    execute_sql_query(db_file, create_table_sql(table_name, TLE_SCHEMA))
+    try:
+        with sqlite3.connect("./database/" + db_file) as conn:
+            # Table creation
+            conn.execute(create_table_sql(table_name, TLE_SCHEMA))
+            # Insert values
+            for s in satellites:
+                tle_dict = {
+                    "name": s[0],
+                    "satnum": s[1].satnum,
+                    "class": s[1].classification,
+                    "ephtype": s[1].ephtype,
+                    "elnum": s[1].elnum,
+                    "revnum": s[1].revnum,
+                }
+                sql, params = insert_sql(table_name, tle_dict)
+                conn.execute(sql, params)
+    except sqlite3.OperationalError as e:
+        logger.error("Failed to insert TLE data into DB:", e)
 
-    for s in satellites:
-        tle_dict = {
-            "name": s[0],
-            "satnum": s[1].satnum,
-            "class": s[1].classification,
-            "ephtype": s[1].ephtype,
-            "elnum": s[1].elnum,
-            "revnum": s[1].revnum,
-        }
-        execute_sql_query(db_file, insert_sql(table_name, tle_dict))
-        
