@@ -1,12 +1,9 @@
 [project]
-name = "satellite-tracker"
+name = "tle-tracker"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "shrub2", email = "kavaliauskas.shrub1@gmail.com" }
-]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "requests>=2.34.2",
 ]
