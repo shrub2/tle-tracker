@@ -53,7 +53,7 @@ def grab_data():
     )
 
 
-def parse_tle_files(filepath: Path) -> list[tuple[str, Satrec]]:
+def parse_tle_files(filepath: Path) -> list[dict]:
     files = filepath.iterdir()
     lines = []
     for file in files:
@@ -69,8 +69,22 @@ def parse_tle_files(filepath: Path) -> list[tuple[str, Satrec]]:
             )
             break
         name, line1, line2 = chunk
-        twoline = Satrec.twoline2rv(line1, line2)
-        satellites.append((name, twoline))
+        sat = Satrec.twoline2rv(line1, line2)
+        tle_dict = {
+            "name": name,
+            "epoch_year": sat.epochyr,
+            "epoch_days": sat.epochdays,
+            "bstar": sat.bstar,
+            "inclination": sat.inclo,
+            "raan": sat.nodeo,
+            "eccentricity": sat.ecco,
+            "arg_perigee": sat.argpo,
+            "mean_anomaly": sat.mo,
+            "mean_motion": sat.no_kozai,
+            "tle_line1": line1,
+            "tle_line2": line2,
+        }
+        satellites.append(tle_dict)
 
     return satellites
 
@@ -96,11 +110,17 @@ def insert_sql(table_name: str, insert_dict: dict):
 
 TLE_SCHEMA = {
     "name": "varchar",
-    "satnum": "int",
-    "class": "varchar",
-    "ephtype": "int",
-    "elnum": "int",
-    "revnum": "int",
+    "epoch_year": "int",
+    "epoch_days": "int",
+    "bstar": "float",
+    "inclination": "float",
+    "raan": "float",
+    "eccentricity": "float",
+    "arg_perigee": "float",
+    "mean_anomaly": "float",
+    "mean_motion": "float",
+    "tle_line1": "varchar",
+    "tle_line2": "varchar",
 }
 
 
@@ -118,15 +138,7 @@ if __name__ == "__main__":
             conn.execute(create_table_sql(table_name, TLE_SCHEMA))
             # Insert values
             for s in satellites:
-                tle_dict = {
-                    "name": s[0],
-                    "satnum": s[1].satnum,
-                    "class": s[1].classification,
-                    "ephtype": s[1].ephtype,
-                    "elnum": s[1].elnum,
-                    "revnum": s[1].revnum,
-                }
-                sql, params = insert_sql(table_name, tle_dict)
+                sql, params = insert_sql(table_name, s)
                 conn.execute(sql, params)
     except sqlite3.OperationalError as e:
         logger.error("Failed to insert TLE data into DB:", e)
