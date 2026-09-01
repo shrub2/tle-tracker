@@ -1,15 +1,23 @@
+import os
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
+import sqlite3
+
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from datetime import datetime, timezone
+from sgp4.api import Satrec
+
+# For debugging
+from sys import stdout
+from sgp4.conveniences import dump_satrec
 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
-URL = "https://static.geodataviewer.com/datasets/iss-tle.json"
+URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
 
 
 def grab_data():
@@ -22,30 +30,105 @@ def grab_data():
     )
     session.mount('https://', HTTPAdapter(max_retries=retries))
     try:
+        logger.info("Requesting %s", URL)
         response = session.get(URL)
+        logger.info(
+            "Got response: %s (%.2fs)",
+            response.status_code,
+            response.elapsed.total_seconds()
+        )
         response.raise_for_status()
     except Exception as e:
         logger.error("Failed to grab data: %s", e)
         return
 
-    if 'application/json' in response.headers.get('content-type', ''):
-        resp_text = ""
-        for line in response.json().get("satellites"):
-            resp_text += f"{line['name']}\n{line['tle1']}\n{line['tle2']}\n"
-    else:
-        resp_text = response.text
-    
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     filepath = f"data/raw/tle_{timestamp}.txt"
     
     with open(filepath, "w") as f:
-        f.write(resp_text)
+        f.write(response.text)
     
     logger.info(
-        f"Saved {len(resp_text.splitlines()) // 3} objects to {filepath}"
+        f"Saved {len(response.text.splitlines()) // 3} objects to {filepath}"
     )
 
 
-if __name__ == "__main__":
-    grab_data()
+def parse_tle_files(filepath: Path) -> list[tuple[str, Satrec]]:
+    files = filepath.iterdir()
+    lines = []
+    for file in files:
+        with file.open('r') as f:
+            lines.extend([line.strip() for line in f if line.strip()])
 
+    satellites = []
+    for i in range(0, len(lines), 3):
+        chunk = lines[i:i + 3]
+        if len(chunk) != 3:
+            logger.warning(
+                "Incomplete TLE record at end of file, skipping: %s", chunk
+            )
+            break
+        name, line1, line2 = chunk
+        twoline = Satrec.twoline2rv(line1, line2)
+        satellites.append((name, twoline))
+
+    return satellites
+
+
+def create_database(db_file: str):
+    parent = "./database/"
+    os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(parent + db_file)
+    conn.close()
+
+
+def execute_sql_query(db_file: str, sql: str):
+    try:
+        with sqlite3.connect("./database/" + db_file) as conn:
+            conn.execute(sql)
+    except sqlite3.OperationalError as e:
+        print("Failed to execute SQL query:", e)
+
+
+def create_table_sql(table_name: str, schema: dict) -> str:
+    columns = ", ".join(f"{k} {v}" for k, v in schema.items())
+    return f"""CREATE TABLE IF NOT EXISTS {table_name} ({columns});"""
+
+
+def insert_sql(table_name: str, insert_dict: dict) -> str:
+    columns = ", ".join(str(k) for k in insert_dict.keys())
+    values = ", ".join(f"'{v}'" for v in insert_dict.values())
+    return f"""INSERT INTO {table_name} ({columns}) VALUES({values});"""
+
+
+TLE_SCHEMA = {
+    "name": "varchar",
+    "satnum": "int",
+    "class": "varchar",
+    "ephtype": "int",
+    "elnum": "int",
+    "revnum": "int",
+}
+
+
+if __name__ == "__main__":
+    # grab_data()
+    satellites = parse_tle_files(Path("data/raw"))
+
+    db_file = "tle_tracker.db"
+    create_database(db_file)
+
+    table_name = "TLE_tracker"
+    execute_sql_query(db_file, create_table_sql(table_name, TLE_SCHEMA))
+
+    for s in satellites:
+        tle_dict = {
+            "name": s[0],
+            "satnum": s[1].satnum,
+            "class": s[1].classification,
+            "ephtype": s[1].ephtype,
+            "elnum": s[1].elnum,
+            "revnum": s[1].revnum,
+        }
+        execute_sql_query(db_file, insert_sql(table_name, tle_dict))
+        
